@@ -2,4 +2,4 @@ __pycache__
 .DS_Store
 __MACOSX
 *.pyc
-dataset
+datasets/
