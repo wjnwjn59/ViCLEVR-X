@@ -4,6 +4,13 @@ from torch.utils.data import Dataset
 from datasets import load_dataset
 import os
 from PIL import Image
+from dotenv import load_dotenv
+
+load_dotenv()
+
+train_path = os.environ.get("train_path")
+val_path = os.environ.get("val_path")
+image_folder = os.environ.get("train_images")
 
 
 class VQADataset(Dataset):
@@ -21,12 +28,12 @@ class VQADataset(Dataset):
         dataset = load_dataset(
             "csv",
             data_files={
-                "train": os.path.join("/kaggle/input/visual-question-answering-computer-vision-nlp/dataset", "data_train.csv"),
-                "test": os.path.join("/kaggle/input/visual-question-answering-computer-vision-nlp/dataset", "data_eval.csv")
+                "train": train_path,
+                "test": val_path
             }
         )
 
-        with open(os.path.join("/kaggle/input/visual-question-answering-computer-vision-nlp/dataset", "answer_space.txt")) as f:
+        with open("/home/minhth/VQA-baseline/ViCLEVR-X/datasets/dataset/answer_space.txt") as f:
             answer_space = f.read().splitlines()
 
         self.data = dataset.map(

@@ -10,7 +10,7 @@ from config.model_cfg import Config
 import torch.optim as optim
 from torch.nn import CrossEntropyLoss
 from torch.cuda.amp import GradScaler
-import tqdm
+from tqdm import tqdm
 from metrics.metrics import calculate_accuracy
 import json
 
@@ -36,12 +36,15 @@ def createDataset():
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
     ])
     train_dataset = VQADataset(train_path, train_path_image, transform)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
     val_dataset = VQADataset(val_path, val_path_image, transform)
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=64,
+                            shuffle=False, num_workers=4, pin_memory=True)
 
     return train_loader, val_loader
 
@@ -57,12 +60,13 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
     val_accuracies = []
     best_loss = float('inf')
     early_stopping_counter = 0
-    
+
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
         running_accuracy = 0.0
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", unit="batch")
+        progress_bar = tqdm(
+            train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", unit="batch")
 
         for images, input_ids, attention_mask, labels in progress_bar:
             images = images.to(device)
@@ -90,14 +94,16 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
         train_losses.append(epoch_loss)
         train_accuracies.append(epoch_accuracy)
 
-        wandb.log({"train_loss": epoch_loss, "train_accuracy": epoch_accuracy, "epoch": epoch+1})
+        wandb.log({"train_loss": epoch_loss,
+                  "train_accuracy": epoch_accuracy, "epoch": epoch+1})
 
         model.eval()
         val_running_loss = 0.0
         val_running_accuracy = 0.0
 
         with torch.no_grad():
-            val_progress_bar = tqdm(val_loader, desc="Validating", unit="batch")
+            val_progress_bar = tqdm(
+                val_loader, desc="Validating", unit="batch")
             for images, input_ids, attention_mask, labels in val_progress_bar:
                 images = images.to(device)
                 input_ids = input_ids.to(device)
@@ -118,10 +124,13 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
         val_losses.append(val_loss)
         val_accuracies.append(val_accuracy)
 
-        wandb.log({"val_loss": val_loss, "val_accuracy": val_accuracy, "epoch": epoch+1})
+        wandb.log(
+            {"val_loss": val_loss, "val_accuracy": val_accuracy, "epoch": epoch+1})
 
-        print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {epoch_loss}, Training Accuracy: {epoch_accuracy}")
-        print(f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
+        print(
+            f"Epoch {epoch+1}/{num_epochs}, Training Loss: {epoch_loss}, Training Accuracy: {epoch_accuracy}")
+        print(
+            f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
 
         # Check if the validation loss improved
         if val_loss < best_loss:
@@ -142,7 +151,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
             }, save_path)
         else:
             early_stopping_counter += 1
-            print(f"No improvement in validation loss for {early_stopping_counter} epochs.")
+            print(
+                f"No improvement in validation loss for {early_stopping_counter} epochs.")
 
         # Check for early stopping
         if early_stopping_counter >= patience:
@@ -158,7 +168,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
     }
 
     wandb.finish()
-    
+
     return metrics
 
 
@@ -168,7 +178,7 @@ if __name__ == "__main__":
 
     # Initialize the model
     model = VQAModel(num_answers=582)
-    model.to(device) 
+    model.to(device)
     # Training parameters
     num_epochs = Config.num_epochs
     lr = Config.lr
@@ -179,7 +189,8 @@ if __name__ == "__main__":
     early_stopping_counter = Config.early_stopping_counter
 
     # Initialize the optimizer and GradScaler for mixed precision training
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = optim.Adam(model.parameters(), lr=lr,
+                           weight_decay=weight_decay)
     scaler = GradScaler()
 
     # Define the loss function
@@ -187,12 +198,14 @@ if __name__ == "__main__":
 
     # Define scheduler
     scheduler_step_size = int(num_epochs * 0.25)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=scheduler_step_size)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=scheduler_step_size)
 
     # Dataset
-    train_loader, val_loader = createDataset
+    train_loader, val_loader = createDataset()
 
-    metrics = train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device, num_epochs, patience, "/kaggle/working/best_model.pth", "VQA_BASELINE(ResNet50-Bert)")
-    with open("/kaggle/working/metrics.json", "w") as f:
+    metrics = train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device,
+                          num_epochs, patience, "/home/minhth/VQA-baseline/ViCLEVR-X/models/best_model.pth", "VQA_BASELINE(ResNet50-Bert)")
+    with open("/home/minhth/VQA-baseline/ViCLEVR-X/metrics/metrics.json", "w") as f:
         json.dump(metrics, f)
     pass

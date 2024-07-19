@@ -1,6 +1,6 @@
 class Config:
-    num_epochs = 100
-    lr = 0.0005
+    num_epochs = 10
+    lr = 0.00001
     weight_decay = 1e-4
     best_loss = float('inf')
     best_model_state = None
