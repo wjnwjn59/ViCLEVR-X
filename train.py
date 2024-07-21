@@ -22,6 +22,8 @@ train_path_image = os.environ.get("train_image")
 val_path = os.environ.get("val_path")
 val_path_image = os.environ.get("val_image")
 
+wandb.login(key=wandb_key, relogin=True)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

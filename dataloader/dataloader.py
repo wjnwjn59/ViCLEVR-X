@@ -1,10 +1,13 @@
 import pandas as pd
+import torch
 from transformers import BertTokenizer
 from torch.utils.data import Dataset
 from datasets import load_dataset
 import os
 from PIL import Image
 from dotenv import load_dotenv
+from torchtext.data.utils import get_tokenizer
+from torchtext.vocab import build_vocab_from_iterator
 
 load_dotenv()
 
@@ -20,7 +23,9 @@ class VQADataset(Dataset):
         self.image_folder = image_folder
         self.transform = transform
         # Initialize the tokenizer
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = get_tokenizer("basic_english")
+        self.vocab = build_vocab_from_iterator(map(self.tokenizer, self.data['question']), specials=["<unk>"])
+        
         # Preprocess the dataset
         self.preprocess_dataset()
 
@@ -64,9 +69,9 @@ class VQADataset(Dataset):
             image = self.transform(image)
 
         # Tokenize the question
-        inputs = self.tokenizer(question, return_tensors='pt', padding='max_length', truncation=True, max_length=512)
+        tokenized_question = self.tokenizer(question)
         # Ensure the tensors are in the correct format for the DataLoader
-        input_ids = inputs['input_ids'].squeeze(0)  # Remove batch dimension
-        attention_mask = inputs['attention_mask'].squeeze(0)  # Remove batch dimension
+        input_ids = torch.tensor(self.vocab(tokenized_question), dtype=torch.long)  # Remove batch dimension
+        attention_mask = torch.ones_like(input_ids)  # Remove batch dimension
 
         return image, input_ids, attention_mask, label

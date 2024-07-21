@@ -8,6 +8,12 @@ from transformers import BertModel
 from metrics.metrics import calculate_accuracy
 from tqdm import tqdm
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 class VQAModel_trained(nn.Module):
     def __init__(self, num_answers):
@@ -70,6 +76,7 @@ def evaluate_model(model, data_loader, criterion, device):
     return loss, accuracy
 
 if __name__ == "__main__":
+    set_seed(42)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = VQAModel_trained(num_answers=582).to(device)
     
