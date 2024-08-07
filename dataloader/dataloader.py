@@ -38,7 +38,7 @@ class VQADataset(Dataset):
             }
         )
 
-        with open("/home/minhth/VQA-baseline/ViCLEVR-X/datasets/dataset/answer_space.txt") as f:
+        with open("/home/VLAI/minhth/ViCLEVR-X/datasets/dataset/answer_space.txt") as f:
             answer_space = f.read().splitlines()
 
         self.data = dataset.map(

@@ -8,23 +8,12 @@ from dataloader.dataloader import VQADataset
 from models.baseline import VQAModel
 from config.model_cfg import Config
 import torch.optim as optim
+import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from metrics.metrics import calculate_accuracy
 import json
-
-load_dotenv()
-
-wandb_key = os.environ.get("WANDB")
-train_path = os.environ.get("train_path")
-train_path_image = os.environ.get("train_image")
-val_path = os.environ.get("val_path")
-val_path_image = os.environ.get("val_image")
-
-wandb.login(key=wandb_key, relogin=True)
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def set_seed(seed):
@@ -38,14 +27,14 @@ def createDataset():
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
-                             0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[
+                             0.5, 0.5, 0.5])
     ])
     train_dataset = VQADataset(train_path, train_path_image, transform)
     train_loader = DataLoader(
-        train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+        train_dataset, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
     val_dataset = VQADataset(val_path, val_path_image, transform)
-    val_loader = DataLoader(val_dataset, batch_size=64,
+    val_loader = DataLoader(val_dataset, batch_size=128,
                             shuffle=False, num_workers=4, pin_memory=True)
 
     return train_loader, val_loader
@@ -175,12 +164,25 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, d
 
 
 if __name__ == "__main__":
+    load_dotenv()
+
+    wandb_key = os.environ.get("WANDB")
+    train_path = os.environ.get("train_path")
+    train_path_image = os.environ.get("train_image")
+    val_path = os.environ.get("val_path")
+    val_path_image = os.environ.get("val_image")
+
+    device_ids = list(map(int, os.environ.get(
+        "CUDA_VISIBLE_DEVICES").split(',')))
+
     set_seed(42)
     wandb.login(key=wandb_key, relogin=True)
 
     # Initialize the model
     model = VQAModel(num_answers=582)
-    model.to(device)
+
+    model.to(f"cuda:{device_ids[0]}")
+
     # Training parameters
     num_epochs = Config.num_epochs
     lr = Config.lr
@@ -206,8 +208,8 @@ if __name__ == "__main__":
     # Dataset
     train_loader, val_loader = createDataset()
 
-    metrics = train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device,
-                          num_epochs, patience, "/home/minhth/VQA-baseline/ViCLEVR-X/models/best_model.pth", "VQA_BASELINE(ResNet50-Bert)")
-    with open("/home/minhth/VQA-baseline/ViCLEVR-X/metrics/metrics.json", "w") as f:
+    metrics = train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device_ids[0],
+                          num_epochs, patience, "/home/VLAI/minhth/ViCLEVR-X/models/best_model.pth", "VLAI(ViT-Bert)")
+    with open("/home/VLAI/minhth/ViCLEVR-X/metrics/metrics.json", "w") as f:
         json.dump(metrics, f)
     pass
