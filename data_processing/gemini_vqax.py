@@ -6,14 +6,13 @@ import time
 from collections import Counter
 from tqdm import tqdm
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from dotenv import load_dotenv
 
-GEMINI_APIKEYS = [
-    "AIzaSyAqXDZDowYnNZNsNuIpY8ztlUFttGRUfpo",
-    "AIzaSyDapof31Zu_6M0KxFxn0GNd81U8tnYZC8Y",
-    "AIzaSyCF-5Fnn7mqvww3Qx-Euxs5mEoHd7Wau60",
-    "AIzaSyCSir1fJB_iI4bNklEB06TQCgGABySvh60",
-    "AIzaSyDWoJ2eV9VR3ofXjcXraq5hjry875y7DiA"
-]
+# Load environment variables
+load_dotenv()
+
+# Get API keys from environment variables
+GEMINI_APIKEYS = os.getenv('GEMINI_APIKEYS').split(',')
 
 datasets_dir = '../../../datasets'
 save_json_path = './gemini_vqax.json'

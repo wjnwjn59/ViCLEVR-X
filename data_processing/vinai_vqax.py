@@ -51,7 +51,7 @@ def split_translated_text(text):
     
     for part in parts:
         part = part.strip()
-        if part.lower() in ["câu hỏi:", "trả lời:", "câu trả lời:", "giải thích:", "lời giải thích:"]:
+        if part.lower() in ["câu hỏi:", "trả lời:", "giải thích:"]:
             if part.lower() in ["trả lời:", "câu trả lời:"]:
                 current_key = "answer"
             elif part.lower() in ["giải thích:", "lời giải thích:"]:
