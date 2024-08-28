@@ -8,10 +8,7 @@ from tqdm import tqdm
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
-
-# Get API keys from environment variables
 GEMINI_APIKEYS = os.getenv('GEMINI_APIKEYS').split(',')
 
 datasets_dir = '../../../datasets'
@@ -127,8 +124,8 @@ def process_dataset(dataset_name, dataset_file):
             item = data[key].copy()  # Create a copy of the original item
             
             # Add Vietnamese translations to the item
-            item["question_vi_gemini"] = translations[translation_index]
-            item["answer_vi_gemini"] = translations[translation_index + 1]
+            item["question_vi_gemini"] = translations[translation_index].strip()
+            item["answer_vi_gemini"] = translations[translation_index + 1].strip()
             item["explanation_vi_gemini"] = translations[translation_index + 2 : translation_index + 2 + len(item["explanation"])]
             
             translation_index += 2 + len(item["explanation"])
