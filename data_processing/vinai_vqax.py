@@ -9,7 +9,7 @@ import re
 
 torch.random.manual_seed(0)
 random.seed(0)
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 os.environ["WORLD_SIZE"] = '2'
 
 # Load datasets

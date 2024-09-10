@@ -4,4 +4,4 @@ __MACOSX
 *.pyc
 datasets/
 .env
-test.ipynb
+*/test.ipynb

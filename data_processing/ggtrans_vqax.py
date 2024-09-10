@@ -1,4 +1,4 @@
-from googletrans import Translator, LANGUAGES
+from googletrans import Translator
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
@@ -74,8 +74,8 @@ def translate_dataset(data, num_threads=20):
 if __name__ == "__main__":
     datasets_dir = '../../../datasets/VQA-X'
     dataset_files = {
-        'test': 'vqaX_test.json',
         'train': 'vqaX_train.json',
+        'test': 'vqaX_test.json',
         'val': 'vqaX_val.json'
     }
 

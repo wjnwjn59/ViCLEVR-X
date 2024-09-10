@@ -150,8 +150,8 @@ def process_dataset(dataset_name, dataset_file):
 
 if __name__ == "__main__":
     dataset_files = {
-        'test': 'vqaX_test.json',
         'train': 'vqaX_train.json',
+        'test': 'vqaX_test.json',
         'val': 'vqaX_val.json'
     }
 
