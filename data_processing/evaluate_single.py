@@ -171,7 +171,7 @@ if __name__ == "__main__":
     parser.add_argument("model", choices=["llama", "gemma", "phi", "qwen", "gpt"], help="The model to use for evaluation.")
     args = parser.parse_args()
 
-    # Sample data for testing
+    # Sample data
     question = "What is this?"
     answer = "This is a shower."
     explanations = [
