@@ -3,5 +3,5 @@ __pycache__
 __MACOSX
 *.pyc
 datasets/
-.env
+*.env
 */test.ipynb
