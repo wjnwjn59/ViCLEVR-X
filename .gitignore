@@ -4,5 +4,4 @@ __MACOSX
 *.pyc
 datasets/
 data_processing/.env
-*.env
 */test.ipynb
