@@ -5,3 +5,4 @@ __MACOSX
 datasets/
 data_processing/.env
 */test.ipynb
+*.env
