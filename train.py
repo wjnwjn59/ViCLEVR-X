@@ -1,215 +1,289 @@
+import gc
 import torch
-import wandb
-import os
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from dotenv import load_dotenv
-from dataloader.dataloader import VQADataset
-from models.baseline import VQAModel
-from config.model_cfg import Config
-import torch.optim as optim
 import torch.nn as nn
-from torch.nn import CrossEntropyLoss
-from torch.cuda.amp import GradScaler
+import torch.optim as optim
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from metrics.metrics import calculate_accuracy
-import json
+import os
+from pathlib import Path
+import yaml
+from typing import Dict, Tuple
+
+from models.vivqax_model import ViVQAX_Model
+from metrics.metrics import VQAXEvaluator
+from dataloader.dataloader import get_dataloaders
 
 
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+class VQAXTrainer:
+    def __init__(self, config: Dict):
+        """
+        Initialize the VQA-X trainer.
 
+        Args:
+            config: Configuration dictionary
+        """
+        self.config = config
+        self.device = torch.device(config['model']['device'])
 
-def createDataset():
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[
-                             0.5, 0.5, 0.5])
-    ])
-    train_dataset = VQADataset(train_path, train_path_image, transform)
-    train_loader = DataLoader(
-        train_dataset, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
-    val_dataset = VQADataset(val_path, val_path_image, transform)
-    val_loader = DataLoader(val_dataset, batch_size=128,
-                            shuffle=False, num_workers=4, pin_memory=True)
+        # Setup directories
+        self.save_dir = Path(config['training']['save_dir'])
+        self.save_dir.mkdir(parents=True, exist_ok=True)
 
-    return train_loader, val_loader
+        # Initialize tensorboard
+        self.writer = SummaryWriter(log_dir=str(self.save_dir / 'logs'))
 
+        # Initialize dataloaders
+        self.train_loader, self.val_loader, self.test_loader, \
+            self.word2idx, self.idx2word, self.answer2idx, self.idx2answer = get_dataloaders(
+                config)
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device, num_epochs, patience, save_path, project_name):
-    # Initialize wandb
-    wandb.init(project=project_name)
-    wandb.watch(model, log="all")
+        # Initialize model
+        self.model = ViVQAX_Model(
+            vocab_size=len(self.word2idx),
+            embed_size=config['model']['embed_size'],
+            hidden_size=config['model']['hidden_size'],
+            num_layers=config['model']['num_layers'],
+            num_answers=len(self.answer2idx),
+            max_explanation_length=config['model']['max_explanation_length'],
+            word2idx=self.word2idx
+        ).to(self.device)
 
-    train_losses = []
-    val_losses = []
-    train_accuracies = []
-    val_accuracies = []
-    best_loss = float('inf')
-    early_stopping_counter = 0
+        # Initialize optimizer and scheduler
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=config['training']['learning_rate']
+        )
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            patience=3,
+            factor=0.5
+        )
 
-    for epoch in range(num_epochs):
-        model.train()
-        running_loss = 0.0
-        running_accuracy = 0.0
-        progress_bar = tqdm(
-            train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", unit="batch")
+        # Initialize loss functions
+        self.criterion_answer = nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.criterion_explanation = nn.CrossEntropyLoss(
+            ignore_index=self.word2idx['<PAD>'],
+            label_smoothing=0.1
+        )
 
-        for images, input_ids, attention_mask, labels in progress_bar:
-            images = images.to(device)
-            input_ids = input_ids.to(device)
-            attention_mask = attention_mask.to(device)
-            labels = labels.to(device)
+        # Initialize evaluator
+        self.evaluator = VQAXEvaluator(device=self.device)
 
-            optimizer.zero_grad()
+        self.best_val_loss = float('inf')
+        self.best_metrics = {}
 
-            with torch.cuda.amp.autocast():
-                outputs = model(images, input_ids, attention_mask)
-                loss = criterion(outputs, labels)
+    def compute_loss(self,
+                     answer_logits: torch.Tensor,
+                     explanation_outputs: torch.Tensor,
+                     answers: torch.Tensor,
+                     explanations: torch.Tensor,
+                     alpha: float = 0.5) -> Tuple[torch.Tensor, float, float]:
+        """Compute the combined loss for answers and explanations."""
+        # compute answer loss
+        answer_loss = self.criterion_answer(answer_logits, answers)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+        # Flatten the explanation outputs and target explanations
+        # This is neccesary because the explanation outputs and target explanations are in different shapes
+        # and we need to compare them in the same shape
+        explanation_outputs_flat = explanation_outputs.view(
+            -1, explanation_outputs.size(-1))
+        explanations_flat = explanations[:, 1:].contiguous(
+        ).view(-1)  # Exclude start token
 
-            running_loss += loss.item()
-            accuracy = calculate_accuracy(outputs, labels)
-            running_accuracy += accuracy
+        # compute explanation loss
+        explanation_loss = self.criterion_explanation(
+            explanation_outputs_flat, explanations_flat)
 
-        epoch_loss = running_loss / len(train_loader)
-        epoch_accuracy = running_accuracy / len(train_loader)
+        # compute total loss use weighted sum of answer loss and explanation loss
+        total_loss = alpha * answer_loss + (1 - alpha) * explanation_loss
 
-        train_losses.append(epoch_loss)
-        train_accuracies.append(epoch_accuracy)
+        if not torch.isfinite(total_loss):
+            raise ValueError("Loss is not finite")
 
-        wandb.log({"train_loss": epoch_loss,
-                  "train_accuracy": epoch_accuracy, "epoch": epoch+1})
+        return total_loss, answer_loss.item(), explanation_loss.item()
 
-        model.eval()
-        val_running_loss = 0.0
-        val_running_accuracy = 0.0
+    def save_checkpoint(self, epoch: int, metrics: Dict, is_best: bool = False):
+        """Save model checkpoint."""
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'metrics': metrics,
+            'config': self.config,
+            'word2idx': self.word2idx,
+            'idx2word': self.idx2word,
+            'answer2idx': self.answer2idx,
+            'idx2answer': self.idx2answer
+        }
+
+        # Save latest checkpoint
+        torch.save(checkpoint, self.save_dir / 'latest_checkpoint.pth')
+
+        # Save best model
+        if is_best:
+            torch.save(checkpoint, self.save_dir / 'best_model.pth')
+            self.best_metrics = metrics
+
+    def train_epoch(self, epoch: int) -> Dict[str, float]:
+        """Train for one epoch."""
+        self.model.train()
+        total_loss = 0
+        total_answer_loss = 0
+        total_explanation_loss = 0
+
+        train_loop = tqdm(self.train_loader, desc=f'Epoch {epoch+1}')
+        for batch in train_loop:
+            self.optimizer.zero_grad()
+
+            # Move batch to device
+            images = batch['image'].to(self.device)
+            questions = batch['question'].to(self.device)
+            answers = batch['answer'].to(self.device)
+            explanations = batch['explanation'].to(self.device)
+
+            # Forward pass
+            answer_logits, explanation_outputs = self.model(
+                images,
+                questions,
+                explanations,
+                teacher_forcing_ratio=0.5
+            )
+
+            # Compute loss
+            loss, answer_loss, explanation_loss = self.compute_loss(
+                answer_logits, explanation_outputs, answers, explanations
+            )
+
+            # Backward pass
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+
+            # Update metrics
+            total_loss += loss.item()
+            total_answer_loss += answer_loss
+            total_explanation_loss += explanation_loss
+
+            train_loop.set_postfix(loss=loss.item())
+
+        # Calculate average losses
+        avg_loss = total_loss / len(self.train_loader)
+        avg_answer_loss = total_answer_loss / len(self.train_loader)
+        avg_explanation_loss = total_explanation_loss / len(self.train_loader)
+
+        return {
+            'loss': avg_loss,
+            'answer_loss': avg_answer_loss,
+            'explanation_loss': avg_explanation_loss
+        }
+
+    def validate(self) -> Dict[str, float]:
+        """Validate the model."""
+        self.model.eval()
+        total_loss = 0
 
         with torch.no_grad():
-            val_progress_bar = tqdm(
-                val_loader, desc="Validating", unit="batch")
-            for images, input_ids, attention_mask, labels in val_progress_bar:
-                images = images.to(device)
-                input_ids = input_ids.to(device)
-                attention_mask = attention_mask.to(device)
-                labels = labels.to(device)
+            for batch in self.val_loader:
+                # Move batch to device
+                images = batch['image'].to(self.device)
+                questions = batch['question'].to(self.device)
+                answers = batch['answer'].to(self.device)
+                explanations = batch['explanation'].to(self.device)
 
-                with torch.cuda.amp.autocast():
-                    outputs = model(images, input_ids, attention_mask)
-                    loss = criterion(outputs, labels)
+                # Forward pass
+                answer_logits, explanation_outputs = self.model(
+                    images,
+                    questions,
+                    explanations,
+                    teacher_forcing_ratio=0.0  # No teacher forcing during validation
+                )
 
-                val_running_loss += loss.item()
-                accuracy = calculate_accuracy(outputs, labels)
-                val_running_accuracy += accuracy
+                # Compute loss
+                loss, _, _ = self.compute_loss(
+                    answer_logits, explanation_outputs, answers, explanations
+                )
+                total_loss += loss.item()
 
-        val_loss = val_running_loss / len(val_loader)
-        val_accuracy = val_running_accuracy / len(val_loader)
+        # Get average loss
+        avg_loss = total_loss / len(self.val_loader)
 
-        val_losses.append(val_loss)
-        val_accuracies.append(val_accuracy)
+        # Get other metrics
+        metrics = self.evaluator.evaluate(
+            self.model,
+            self.val_loader,
+            self.idx2word
+        )
 
-        wandb.log(
-            {"val_loss": val_loss, "val_accuracy": val_accuracy, "epoch": epoch+1})
+        # Add loss to metrics
+        metrics['loss'] = avg_loss
 
-        print(
-            f"Epoch {epoch+1}/{num_epochs}, Training Loss: {epoch_loss}, Training Accuracy: {epoch_accuracy}")
-        print(
-            f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
+        return metrics
 
-        # Check if the validation loss improved
-        if val_loss < best_loss:
-            best_loss = val_loss
-            best_model_state = model.state_dict()
-            early_stopping_counter = 0  # Reset counter if we get a new best loss
-            print(f"Saving model with lowest validation loss: {best_loss:.4f}")
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scaler_state_dict': scaler.state_dict(),
-                'best_loss': best_loss,
-                'train_losses': train_losses,
-                'val_losses': val_losses,
-                'train_accuracies': train_accuracies,
-                'val_accuracies': val_accuracies
-            }, save_path)
-        else:
-            early_stopping_counter += 1
-            print(
-                f"No improvement in validation loss for {early_stopping_counter} epochs.")
+    def train(self):
+        """Main training loop."""
+        num_epochs = self.config['training']['num_epochs']
 
-        # Check for early stopping
-        if early_stopping_counter >= patience:
-            print("Early stopping triggered.")
-            break
+        for epoch in range(num_epochs):
+            # Training phase
+            train_metrics = self.train_epoch(epoch)
+            print(train_metrics)
+            
+            # Validation phase
+            val_metrics = self.validate()
+            print(val_metrics)
+            
+            # Update learning rate
+            self.scheduler.step(val_metrics['loss'])
 
-    # Save the final metrics
-    metrics = {
-        "train_losses": train_losses,
-        "val_losses": val_losses,
-        "train_accuracies": train_accuracies,
-        "val_accuracies": val_accuracies
-    }
+            # Log metrics
+            for name, value in {**train_metrics, **val_metrics}.items():
+                self.writer.add_scalar(f'metrics/{name}', value, epoch)
 
-    wandb.finish()
+            # Save checkpoint if best model
+            is_best = val_metrics['loss'] < self.best_val_loss
+            if is_best:
+                self.best_val_loss = val_metrics['loss']
+            self.save_checkpoint(epoch, val_metrics, is_best)
 
-    return metrics
+            # Print epoch summary
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            print(f"Train Loss: {train_metrics['loss']:.4f}")
+            print(f"Val Loss: {val_metrics['loss']:.4f}")
+            print(f"Val Answer Accuracy: {val_metrics['answer_accuracy']:.4f}")
+            print(f"Val BLEU-4: {val_metrics['bleu_4']:.4f}")
+            print(f"Val METEOR: {val_metrics['meteor']:.4f}")
+            print(f"Val CIDEr: {val_metrics['cider']:.4f}")
+            print(f"Val SPICE: {val_metrics['spice']:.4f}")
+            print(f"Val BERTScore: {val_metrics['bertscore_f']:.4f}")
+            print("=" * 50)
 
 
-if __name__ == "__main__":
-    load_dotenv()
+def release_memory(trainer):
+    del model
+    del train_loader
+    del val_loader
+    del test_loader
+    torch.cuda.empty_cache()
+    gc.collect()
 
-    wandb_key = os.environ.get("WANDB")
-    train_path = os.environ.get("train_path")
-    train_path_image = os.environ.get("train_image")
-    val_path = os.environ.get("val_path")
-    val_path_image = os.environ.get("val_image")
 
-    device_ids = list(map(int, os.environ.get(
-        "CUDA_VISIBLE_DEVICES").split(',')))
+def main():
+    # Load config
+    with open('./ViCLEVR-X/config/config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
 
-    set_seed(42)
-    wandb.login(key=wandb_key, relogin=True)
+    # Set random seed
+    torch.manual_seed(config['training']['seed'])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config['training']['seed'])
 
-    # Initialize the model
-    model = VQAModel(num_answers=582)
+    # Initialize trainer
+    trainer = VQAXTrainer(config)
 
-    model.to(f"cuda:{device_ids[0]}")
+    # Start training
+    trainer.train()
 
-    # Training parameters
-    num_epochs = Config.num_epochs
-    lr = Config.lr
-    weight_decay = Config.weight_decay
-    best_loss = Config.best_loss
-    best_model_state = Config.best_model_state
-    patience = Config.patience  # Number of epochs to wait for improvement before stopping
-    early_stopping_counter = Config.early_stopping_counter
 
-    # Initialize the optimizer and GradScaler for mixed precision training
-    optimizer = optim.Adam(model.parameters(), lr=lr,
-                           weight_decay=weight_decay)
-    scaler = GradScaler()
-
-    # Define the loss function
-    criterion = CrossEntropyLoss()
-
-    # Define scheduler
-    scheduler_step_size = int(num_epochs * 0.25)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=scheduler_step_size)
-
-    # Dataset
-    train_loader, val_loader = createDataset()
-
-    metrics = train_model(model, train_loader, val_loader, criterion, optimizer, scaler, device_ids[0],
-                          num_epochs, patience, "/home/VLAI/minhth/ViCLEVR-X/models/best_model.pth", "VLAI(ViT-Bert)")
-    with open("/home/VLAI/minhth/ViCLEVR-X/metrics/metrics.json", "w") as f:
-        json.dump(metrics, f)
-    pass
+if __name__ == '__main__':
+    main()

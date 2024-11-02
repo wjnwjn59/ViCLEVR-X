@@ -1,77 +1,84 @@
-import pandas as pd
-import torch
-from transformers import BertTokenizer
-from torch.utils.data import Dataset
-from datasets import load_dataset
-import os
-from PIL import Image
-from dotenv import load_dotenv
-from torchtext.data.utils import get_tokenizer
-from torchtext.vocab import build_vocab_from_iterator
+from torch.utils.data import DataLoader
+from .dataset import VQA_X_Dataset, load_data, build_vocabularies
 
-load_dotenv()
-
-train_path = os.environ.get("train_path")
-val_path = os.environ.get("val_path")
-image_folder = os.environ.get("train_images")
-
-
-class VQADataset(Dataset):
-    def __init__(self, csv_file, image_folder, transform=None):
-        # Load dataset from CSV
-        self.data = pd.read_csv(csv_file)
-        self.image_folder = image_folder
-        self.transform = transform
-        # Initialize the tokenizer
-        self.tokenizer = get_tokenizer("basic_english")
-        self.vocab = build_vocab_from_iterator(map(self.tokenizer, self.data['question']), specials=["<unk>"])
+def get_dataloaders(config):
+    """
+    Create DataLoader objects for training, validation, and testing.
+    
+    Args:
+        config (dict): Configuration dictionary containing data paths and parameters.
         
-        # Preprocess the dataset
-        self.preprocess_dataset()
+    Returns:
+        tuple: Train, validation, and test dataloaders, along with vocabulary mappings.
+    """
+    # Load datasets
+    train_data = load_data(config['data']['train_path'])
+    val_data = load_data(config['data']['val_path'])
+    test_data = load_data(config['data']['test_path'])
 
-    def preprocess_dataset(self):
-        dataset = load_dataset(
-            "csv",
-            data_files={
-                "train": train_path,
-                "test": val_path
-            }
-        )
+    # Build vocabularies from training data
+    word2idx, idx2word, answer2idx, idx2answer = build_vocabularies(train_data)
 
-        with open("/home/VLAI/minhth/ViCLEVR-X/datasets/dataset/answer_space.txt") as f:
-            answer_space = f.read().splitlines()
+    # Create dataset instances
+    train_dataset = VQA_X_Dataset(
+        train_data,
+        config['data']['train_image_dir'],
+        word2idx=word2idx,
+        idx2word=idx2word,
+        answer2idx=answer2idx,
+        idx2answer=idx2answer
+    )
 
-        self.data = dataset.map(
-            lambda examples: {
-                'label': [
-                    answer_space.index(ans.replace(" ", "").split(",")[0])  
-                    for ans in examples['answer']
-                ]
-            },
-            batched=True
-        )
+    val_dataset = VQA_X_Dataset(
+        val_data,
+        config['data']['val_image_dir'],
+        word2idx=word2idx,
+        idx2word=idx2word,
+        answer2idx=answer2idx,
+        idx2answer=idx2answer
+    )
 
-        # Convert dataset to DataFrame for easy indexing
-        self.data = pd.DataFrame(self.data['train'])
+    test_dataset = VQA_X_Dataset(
+        test_data,
+        config['data']['test_image_dir'],
+        word2idx=word2idx,
+        idx2word=idx2word,
+        answer2idx=answer2idx,
+        idx2answer=idx2answer
+    )
 
-    def __len__(self):
-        return len(self.data)
+    # Create DataLoaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config['training']['batch_size'],
+        shuffle=True,
+        num_workers=config['training']['num_workers'],
+        pin_memory=True,
+        drop_last=True
+    )
 
-    def __getitem__(self, idx):
-        row = self.data.iloc[idx]
-        image_id = row['image_id']
-        question = row['question']
-        label = row['label']
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['training']['batch_size'],
+        shuffle=False,
+        num_workers=config['training']['num_workers'],
+        pin_memory=True
+    )
 
-        image_path = os.path.join(self.image_folder, f"{image_id}.png")
-        image = Image.open(image_path).convert('RGB')
-        if self.transform:
-            image = self.transform(image)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config['evaluation']['batch_size'],
+        shuffle=False,
+        num_workers=config['evaluation']['num_workers'],
+        pin_memory=True
+    )
 
-        # Tokenize the question
-        tokenized_question = self.tokenizer(question)
-        # Ensure the tensors are in the correct format for the DataLoader
-        input_ids = torch.tensor(self.vocab(tokenized_question), dtype=torch.long)  # Remove batch dimension
-        attention_mask = torch.ones_like(input_ids)  # Remove batch dimension
-
-        return image, input_ids, attention_mask, label
+    return (
+        train_loader, 
+        val_loader, 
+        test_loader, 
+        word2idx, 
+        idx2word, 
+        answer2idx, 
+        idx2answer
+    )
