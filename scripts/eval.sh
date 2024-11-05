@@ -1,0 +1,1 @@
+python ViCLEVR-X/evaluate.py --checkpoint ./ViCLEVR-X/weights/best_model.pth --config ./ViCLEVR-X/config/config.yaml
